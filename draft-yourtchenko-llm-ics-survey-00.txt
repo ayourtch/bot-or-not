@@ -1,0 +1,2072 @@
+
+
+
+
+Network Working Group                                     A. Yourtchenko
+Internet-Draft                                                     Cisco
+Intended status: Informational                           21 October 2026
+Expires: 24 April 2027
+
+
+            LLM-assisted survey related to Internet Checksum
+                  draft-yourtchenko-llm-ics-survey-00
+
+Abstract
+
+   The Internet checksum is used to detect corrupted packets in many
+   protocols: IPv4, ICMP, UDP, TCP, and others.  When a router or
+   translator changes a packet, it usually updates the checksum
+   incrementally from the old and new field values.  Advice on how to do
+   this has been published over four decades and is scattered across
+   multiple RFCs.  This document collects that advice and adds an update
+   procedure, reference code, and test vectors.  It specifies how to
+   handle the values 0x0000 and 0xFFFF, including the UDP value 0x0000,
+   which means "no checksum".  It also gives a branch-free UDP checksum
+   update algorithm, and surveys the ways in which protocols avoid
+   checksum updates.  It also analyzes the errata against RFC 1624.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 24 April 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 1]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+   2.  Conventions and Definitions . . . . . . . . . . . . . . . . .   4
+   3.  Computing the Internet Checksum . . . . . . . . . . . . . . .   5
+     3.1.  Definition  . . . . . . . . . . . . . . . . . . . . . . .   5
+     3.2.  Coverage  . . . . . . . . . . . . . . . . . . . . . . . .   6
+     3.3.  Properties Used by Implementations  . . . . . . . . . . .   8
+     3.4.  Reference Code  . . . . . . . . . . . . . . . . . . . . .   8
+   4.  Incremental Update  . . . . . . . . . . . . . . . . . . . . .   9
+     4.1.  Incremental Update Versus Recomputation . . . . . . . . .  10
+     4.2.  Background  . . . . . . . . . . . . . . . . . . . . . . .  10
+     4.3.  The Update Equation . . . . . . . . . . . . . . . . . . .  10
+     4.4.  Special Values of the Checksum Field  . . . . . . . . . .  11
+     4.5.  Multiple Words and Changes in Length  . . . . . . . . . .  12
+     4.6.  Fields That Are Not Aligned 16-Bit Words  . . . . . . . .  12
+     4.7.  Changes to Pseudo-Header Fields . . . . . . . . . . . . .  13
+     4.8.  Reference Code  . . . . . . . . . . . . . . . . . . . . .  14
+   5.  Zero-Valued Checksum Fields . . . . . . . . . . . . . . . . .  14
+     5.1.  Fields Without a Checksum . . . . . . . . . . . . . . . .  15
+     5.2.  Results Equal to Zero . . . . . . . . . . . . . . . . . .  16
+     5.3.  Incoming 0xFFFF in Other Protocols  . . . . . . . . . . .  16
+     5.4.  Reference Code  . . . . . . . . . . . . . . . . . . . . .  17
+     5.5.  Branch-Free Implementation  . . . . . . . . . . . . . . .  18
+     5.6.  Corruption of the Zero Encodings  . . . . . . . . . . . .  20
+     5.7.  Partial Coverage  . . . . . . . . . . . . . . . . . . . .  20
+   6.  Techniques for Avoiding Checksum Updates  . . . . . . . . . .  20
+     6.1.  Checksum-Neutral Address Mapping  . . . . . . . . . . . .  20
+     6.2.  Checksum Complement Fields  . . . . . . . . . . . . . . .  21
+     6.3.  Zero UDP Checksum . . . . . . . . . . . . . . . . . . . .  22
+     6.4.  Header Compression  . . . . . . . . . . . . . . . . . . .  22
+     6.5.  Alternative Algorithms  . . . . . . . . . . . . . . . . .  23
+   7.  Analysis of the Errata to RFC 1624  . . . . . . . . . . . . .  23
+   8.  Problems in RFC 1624 That No Erratum Reports  . . . . . . . .  24
+   9.  Summary of Requirements . . . . . . . . . . . . . . . . . . .  25
+   10. Security Considerations . . . . . . . . . . . . . . . . . . .  26
+   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  27
+   12. References  . . . . . . . . . . . . . . . . . . . . . . . . .  27
+     12.1.  Normative References . . . . . . . . . . . . . . . . . .  27
+     12.2.  Informative References . . . . . . . . . . . . . . . . .  27
+   Appendix A.  Test Vectors . . . . . . . . . . . . . . . . . . . .  31
+     A.1.  IPv4 Header Checksum  . . . . . . . . . . . . . . . . . .  32
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 2]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+     A.2.  TTL Decrement . . . . . . . . . . . . . . . . . . . . . .  32
+     A.3.  Source Address Rewrite  . . . . . . . . . . . . . . . . .  33
+     A.4.  Pseudo-Header Replacement . . . . . . . . . . . . . . . .  33
+     A.5.  The RFC 1624 Example  . . . . . . . . . . . . . . . . . .  34
+     A.6.  Erratum 4782  . . . . . . . . . . . . . . . . . . . . . .  35
+     A.7.  Erratum 5864: Two Folds . . . . . . . . . . . . . . . . .  35
+     A.8.  Zero-Valued Fields  . . . . . . . . . . . . . . . . . . .  36
+     A.9.  Branch-Free Update  . . . . . . . . . . . . . . . . . . .  37
+   Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . . .  37
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  37
+
+1.  Introduction
+
+   The Internet checksum is the 16-bit ones' complement of the ones'
+   complement sum of the 16-bit words of the data.  [RFC0791] defines it
+   for the IPv4 header, and most transport protocols reuse it, each with
+   its own coverage.  [RFC1071] describes its computation in software,
+   and [RFC1936] in hardware.
+
+   Routers, translators, and tunnel endpoints often change fields
+   covered by the checksum.  They usually update the checksum
+   incrementally, from the old and new values of the changed fields.
+   [RFC1071] sketches this procedure, and [RFC1141] spells it out.
+   [RFC1624] shows that an implementation of RFC 1141 sometimes stores
+   0xFFFF where 0x0000 is correct, and corrects the procedure.
+
+   Three errata have since been filed against RFC 1624.  The first
+   reports a failure that does not occur.  The other two respond to it,
+   and explain how to evaluate ones' complement addition on processors
+   with words wider than 16 bits (Section 7).
+
+   RFC 1624 also argues that a checksum field never holds 0xFFFF,
+   because the IPv4 header always has a non-zero field.  On that basis,
+   RFC 1624 treats a result of 0x0000 as valid.  In UDP, however, a
+   sender transmits a computed zero as 0xFFFF, and a field of 0x0000
+   means "no checksum".  An implementation that follows RFC 1624 as
+   written can therefore turn a valid UDP checksum into "no checksum".
+
+   Over the same years, protocol designers found several ways to avoid
+   checksum updates.  An operator can choose address mappings under
+   which the checksum stays the same.  A protocol designer can reserve a
+   field that an intermediate system adjusts to cancel its own change.
+   Tunnel endpoints often send UDP with a zero checksum.  A header
+   compressor can drop the checksum, and the decompressor then
+   regenerates it.  Other protocol designers chose a Cyclic Redundancy
+   Check (CRC) over the Internet checksum.  Each technique is described
+   in a different document.
+
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 3]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   This document covers the following topics:
+
+   *  how to compute the checksum, and what it covers (Section 3);
+
+   *  the incremental update procedure, for single words, multiple
+      words, and fields smaller than a word (Section 4);
+
+   *  updates to checksum fields that can be zero (Section 5);
+
+   *  techniques for avoiding checksum updates, and their limits
+      (Section 6);
+
+   *  an analysis of the errata against RFC 1624 (Section 7); and
+
+   *  test vectors (Appendix A).
+
+   This document does not change the checksum algorithm, or what any
+   protocol sends on the wire.
+
+2.  Conventions and Definitions
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   This document uses the following terms.
+
+   Intermediate system:  A router, translator, tunnel endpoint, or other
+      node that changes a packet in transit and updates its checksum.
+      Such a node is called a middlebox in [RFC6936] and [RFC8086].
+
+   Full computation:  Computation of the checksum from scratch, over all
+      of the covered data after the change, as described in Section 3.1.
+
+   The spelling "ones' complement" follows [RFC9293].  Older RFCs,
+   including [RFC1624], write "one's complement".
+
+   This document uses the following notation.
+
+   a +' b:  Ones' complement addition of two 16-bit values.  Add a and b
+      as unsigned numbers.  If the sum exceeds 0xFFFF, add the carry
+      back into the low 16 bits ("end-around carry").
+
+   a -' b:  Ones' complement subtraction with end-around borrow.
+      Subtract b from a modulo 2^16.  If a is less than b, subtract one
+      more.
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 4]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   ~a:  The 16-bit ones' complement of a, that is, a XOR 0xFFFF.  In a
+      register wider than 16 bits, complement only the low 16 bits.
+
+   +0, -0:  The two encodings of zero in ones' complement arithmetic.
+      +0 is 0x0000, and -0 is 0xFFFF.
+
+   Congruent:  Two values are congruent if they are equal modulo 0xFFFF.
+      Thus, +0 and -0 are congruent, and every other value is congruent
+      only to itself.  Ones' complement addition is addition modulo
+      0xFFFF.
+
+   HC, HC':  The checksum field before and after a change.  The names
+      come from [RFC1624], where HC stands for "header checksum".  This
+      document uses them for every protocol.
+
+   m, m':  A changed 16-bit word, before and after the change.
+
+3.  Computing the Internet Checksum
+
+   This section defines the checksum and describes its coverage in each
+   protocol.  It then describes how implementations compute the sum
+   quickly, and gives reference code.
+
+3.1.  Definition
+
+   A sender computes the checksum as follows.
+
+   1.  Set the checksum field to zero.
+
+   2.  Pair adjacent octets into 16-bit words in network byte order.  If
+       the data has an odd length, pad it with one zero octet.  Do not
+       send the pad octet.
+
+   3.  Compute the ones' complement sum S of the words.
+
+   4.  Store ~S in the checksum field.
+
+   A receiver computes the ones' complement sum over the same data,
+   including the checksum field.  The checksum is valid if the sum is -0
+   (0xFFFF).  Some receivers instead recompute the checksum and compare
+   it with the field.  Such a receiver rejects a valid packet if the
+   field and its own result are different encodings of zero (Section 5
+   of [RFC1624]).  Receivers SHOULD NOT verify checksums this way.
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 5]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+3.2.  Coverage
+
+   Each protocol defines the data covered by its checksum.  In ICMPv6
+   and the transport protocols, the sender also adds a "pseudo-header"
+   to the sum.  The pseudo-header consists of fields of the IP header.
+   Therefore, a translator that changes an IP address also has to update
+   the transport checksum, even if the transport header is unchanged.
+   Table 1 lists the coverage for each protocol.  IPv6 has no header
+   checksum, and so the table has no row for it.  Section 5 describes
+   the special values 0x0000 and 0xFFFF and their meaning in each
+   protocol.
+
+    +====================+=============================+==============+
+    | Protocol           | Coverage                    | Reference    |
+    +====================+=============================+==============+
+    | IPv4 header        | IPv4 header only            | [RFC0791]    |
+    +--------------------+-----------------------------+--------------+
+    | ICMPv4             | ICMP message                | [RFC0792]    |
+    +--------------------+-----------------------------+--------------+
+    | ICMPv6             | pseudo-header and ICMPv6    | Section 2.3  |
+    |                    | message                     | of [RFC4443] |
+    +--------------------+-----------------------------+--------------+
+    | UDP                | pseudo-header, header, and  | [RFC0768],   |
+    |                    | payload                     | Section 8.1  |
+    |                    |                             | of [RFC8200] |
+    +--------------------+-----------------------------+--------------+
+    | Lightweight UDP    | pseudo-header, and the      | [RFC3828]    |
+    | (UDP-Lite)         | number of octets given by   |              |
+    |                    | the Checksum Coverage field |              |
+    +--------------------+-----------------------------+--------------+
+    | TCP                | pseudo-header, header, and  | [RFC9293]    |
+    |                    | payload                     |              |
+    +--------------------+-----------------------------+--------------+
+    | Datagram           | pseudo-header, header, and  | [RFC4340]    |
+    | Congestion Control | the part of the payload     |              |
+    | Protocol (DCCP)    | given by the Checksum       |              |
+    |                    | Coverage (CsCov) field      |              |
+    +--------------------+-----------------------------+--------------+
+
+                   Table 1: Checksum Coverage by Protocol
+
+   Figure 1 shows the IPv4 pseudo-header, as used by UDP [RFC0768] and
+   TCP [RFC9293].  Figure 2 shows the IPv6 pseudo-header (Section 8.1 of
+   [RFC8200]).  In both, the upper-layer length is the length of the
+   transport header and payload.
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 6]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+        0                   1                   2                   3
+        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                         Source Address                        |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                      Destination Address                      |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |      Zero     |    Protocol   |       Upper-Layer Length      |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                        Figure 1: IPv4 Pseudo-Header
+
+        0                   1                   2                   3
+        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                                                               |
+       +                                                               +
+       |                                                               |
+       +                         Source Address                        +
+       |                                                               |
+       +                                                               +
+       |                                                               |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                                                               |
+       +                                                               +
+       |                                                               |
+       +                      Destination Address                      +
+       |                                                               |
+       +                                                               +
+       |                                                               |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                   Upper-Layer Packet Length                   |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                      Zero                     |  Next Header  |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                        Figure 2: IPv6 Pseudo-Header
+
+   The IPv6 pseudo-header has a 32-bit length field, and the IPv4
+   pseudo-header has a 16-bit one.  For lengths below 65536, the sender
+   adds the same value to the sum for the length in either pseudo-
+   header.  The same is true of the Protocol and Next Header fields.
+   Thus, a translator between IPv4 and IPv6 accounts only for the
+   addresses when it updates the transport checksum (Section 4.7).
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 7]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+3.3.  Properties Used by Implementations
+
+   [RFC1071] describes the properties of the ones' complement sum that
+   fast implementations use.
+
+   Commutative and associative:  The words can be added in any order.
+      For example, an implementation can sum several parts of the data
+      in parallel, and then add the partial sums.  If a part starts at
+      an odd offset, the implementation swaps the bytes of its partial
+      sum (Section 4.6).
+
+   Byte order independence:  If an implementation swaps the bytes of
+      every word, the bytes of the sum are swapped too.  Therefore, an
+      implementation on a little-endian processor can sum in native byte
+      order and swap the result once.
+
+   Deferred carries:  Ordinary addition in a 32-bit or 64-bit register
+      is enough, if the carries are folded into the low 16 bits at the
+      end.  The sum can exceed 0xFFFF after one fold, so an
+      implementation MUST repeat the fold until the sum fits in 16 bits.
+      For example, the 32-bit sum 0xFFFF + 0xAAAA + 0x5556 is 0x1FFFF.
+      This sum is 0xFFFF + 0x1 = 0x10000 after one fold, and 0x0000 +
+      0x1 = 0x0001 after two.  Erratum 5864 reports this case
+      (Appendix A.7).
+
+   Some implementations compute the checksum while they copy the data
+   [RFC0817].  Others leave it to hardware, either a dedicated circuit
+   [RFC1936] or the network interface ("checksum offload").
+
+3.4.  Reference Code
+
+   This section gives C functions for the ones' complement sum of a
+   buffer, starting from a partial sum.  An implementation can use them
+   for full computation and for incremental update.  A caller can pass
+   up to 2^17 octets without overflow of the 32-bit accumulator.  For a
+   protocol with a pseudo-header, the caller passes the sum of the
+   pseudo-header as pseudo_sum.  For the IPv4 header and ICMPv4, it
+   passes 0.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 8]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   <CODE BEGINS>
+   #include <stddef.h>
+   #include <stdint.h>
+
+   /* Fold a 32-bit accumulator to a 16-bit ones' complement sum. */
+   static uint16_t
+   csum_fold(uint32_t sum)
+   {
+       while (sum > 0xffff)
+           sum = (sum & 0xffff) + (sum >> 16);
+       return (uint16_t)sum;
+   }
+
+   /* Ones' complement sum of buf, added to the partial sum "init". */
+   static uint16_t
+   csum_partial(const uint8_t *buf, size_t len, uint16_t init)
+   {
+       uint32_t sum = init;
+
+       while (len > 1) {
+           sum += ((uint32_t)buf[0] << 8) | buf[1];
+           buf += 2;
+           len -= 2;
+       }
+       if (len == 1)
+           sum += (uint32_t)buf[0] << 8;
+       return csum_fold(sum);
+   }
+
+   /* Checksum field value for buf (checksum field already zero). */
+   static uint16_t
+   csum_compute(const uint8_t *buf, size_t len, uint16_t pseudo_sum)
+   {
+       return (uint16_t)~csum_partial(buf, len, pseudo_sum);
+   }
+   <CODE ENDS>
+
+4.  Incremental Update
+
+   This section explains why intermediate systems update the checksum
+   incrementally, and gives the update equation with its proof.  It then
+   covers special field values, changes in length, unaligned fields,
+   pseudo-header fields, and reference code.
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                 [Page 9]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+4.1.  Incremental Update Versus Recomputation
+
+   An intermediate system can update the checksum incrementally, or
+   compute it again over the changed packet.  With an incremental
+   update, the system does less work, and the receiver keeps the end-to-
+   end error detection of the checksum.  If the packet was corrupted
+   before it reached the system, the receiver still detects the
+   corruption.  The same holds for corruption in the memory of the
+   system.  A system that computes the checksum from scratch writes a
+   valid checksum over the corrupted data.  Intermediate systems SHOULD
+   therefore update checksums incrementally.  A system that has verified
+   the incoming checksum can compute the new one from scratch.
+
+4.2.  Background
+
+   Suppose a 16-bit word changes from m to m'.  [RFC1071] observes that
+   the sum S then changes to S' = S + (m' - m).  [RFC1141] rewrites this
+   in terms of the checksum field:
+
+       HC' = HC +' m +' ~m'                      (RFC 1141 form)
+
+   [RFC1141] assumes that ~(a +' b) equals ~a +' ~b.  The two sides are
+   congruent, but they can be different encodings of zero.  For example,
+   ~(0x0001 +' 0xFFFE) is 0x0000, and ~0x0001 +' ~0xFFFE is 0xFFFF.
+   [RFC1624] shows that, with the RFC 1141 form, the result is sometimes
+   -0 (0xFFFF) where +0 (0x0000) is correct.  It also gives the
+   corrected form, which Section 4.3 presents.
+
+   The example in [RFC1624] is as follows.  One word changes from m =
+   0x5555 to m' = 0x3285, and the other words sum to 0xCD7A.  Therefore,
+   HC = ~(0xCD7A +' 0x5555) = ~0x22D0 = 0xDD2F.  With a full
+   computation, HC' = ~(0xCD7A +' 0x3285) = ~0xFFFF = 0x0000.  With the
+   RFC 1141 form, HC' = 0xDD2F +' 0x5555 +' 0xCD7A = 0xFFFF.  All steps
+   of this example are in Appendix A.5.
+
+4.3.  The Update Equation
+
+   When one 16-bit word changes from m to m', an implementation that
+   updates the checksum incrementally SHOULD compute:
+
+       HC' = ~(~HC +' ~m +' m')                        (Eqn. 1)
+
+   Eqn. 1 is Equation 3 of [RFC1624].  Suppose that a sender computed HC
+   correctly, and that the data has at least one non-zero word.  Then an
+   implementation that uses Eqn. 1 obtains the same value as a full
+   computation.  The proof is as follows.
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 10]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   1.  Ones' complement addition is addition modulo 0xFFFF (Section 2),
+       and ~x is congruent to -x.  Therefore, the inner sum of Eqn. 1 is
+       congruent to the sum of the changed data.
+
+   2.  With end-around carry, a sum is +0 only when all its inputs are
+       +0, so the sum of the changed data is never +0.  The inner sum of
+       Eqn. 1 is +0 only if HC is 0xFFFF, and a correct sender never
+       writes 0xFFFF.
+
+   3.  Only +0 and -0 are congruent to zero.  Two congruent values that
+       are both different from +0 are therefore equal.
+
+   Eqn. 1 was also tested against full computation, for every pair of HC
+   and m, with six boundary values of m' for each pair.  In all of these
+   cases, about 2.6 x 10^10, the result of Eqn. 1 was correct.  In the
+   same test, the RFC 1141 form was wrong only where the correct result
+   is +0, and its result there was -0.
+
+   [RFC1624] also gives a form based on subtraction:
+
+       HC' = HC -' ~m -' m'                            (Eqn. 2)
+
+   Eqn. 2 is correct only if -' is subtraction with end-around borrow,
+   as defined in Section 2.  Some implementers compute -' as "add the
+   complement, with end-around carry".  With that definition, Eqn. 2 is
+   the RFC 1141 form, and it has the same flaw.  Implementers make this
+   mistake easily, so implementations SHOULD use Eqn. 1.
+
+4.4.  Special Values of the Checksum Field
+
+   Eqn. 1 and Eqn. 2 are correct only when a sender computed the value
+   in the checksum field correctly.  A field of 0x0000 or 0xFFFF can be
+   a value that was not a result of such a computation.
+
+   *  In UDP, a field of 0x0000 means that no checksum was computed.
+      There is no checksum to update, so Eqn. 1 does not apply.
+
+   *  In the IPv4 header, ICMP, ICMPv6, TCP, and DCCP, a correct sender
+      never writes 0xFFFF.  A value of 0xFFFF there means that an
+      upstream system updated the checksum incorrectly.
+
+   The result of Eqn. 1 can also have a special meaning.  In UDP, a
+   result of 0x0000 means "no checksum", even though a checksum was
+   computed.  An intermediate system MUST apply the rules of Section 5
+   together with Eqn. 1.
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 11]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+4.5.  Multiple Words and Changes in Length
+
+   A 32-bit IPv4 address spans two words, and a 128-bit IPv6 address
+   spans eight.  When the old words m_1 to m_j are replaced by the new
+   words m'_1 to m'_k, an implementation extends Eqn. 1 as follows:
+
+       HC' = ~(~HC +' ~m_1 +' ... +' ~m_j +' m'_1 +' ... +' m'_k)
+
+   The terms can be added in any order.  An implementation can also
+   apply Eqn. 1 once per word, with the same result.  A Network Address
+   Translator (NAT) can precompute the difference between its inside and
+   outside addresses as one 16-bit sum.  It then adds that sum inside
+   Eqn. 1 for each packet.
+
+   The number of old words j and the number of new words k can differ.
+   Removed data is counted only as old words, and inserted data only as
+   new words.  For example, a translator from IPv4 to IPv6 replaces a
+   pseudo-header of 6 words with one of 20 words (Section 4.7).  When
+   the length of the checksummed data changes, an implementation also
+   handles the following points.
+
+   *  If an even number of octets is inserted or removed, later data
+      stays aligned.  With an odd number, every later octet moves to the
+      other half of its 16-bit word.  The implementation then needs the
+      byte-swapped sum of all later data (Section 3.3), so the update
+      takes about as much work as a full computation.
+
+   *  Length fields are also changed words.  The UDP Length appears both
+      in the UDP header and in the pseudo-header, so the implementation
+      counts it twice.  For TCP, the length appears only in the pseudo-
+      header.  In IPv4, the implementation also updates the header
+      checksum for the new Total Length.
+
+   *  For the sum, the implementation pads a trailing odd octet with a
+      zero octet (Section 3.1).  After a length change, it pads at the
+      new end of the data.
+
+4.6.  Fields That Are Not Aligned 16-Bit Words
+
+   An implementation applies Eqn. 1 to the 16-bit words of the data.
+   Implementers need to take care with 8-bit fields and with fields that
+   start at an odd offset.  In both cases, an implementation counts
+   offsets from the start of the checksummed data.  That data includes
+   the pseudo-header, if there is one.  The pseudo-header has an even
+   length, so a transport header field has the same offset parity with
+   or without it.
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 12]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   For an 8-bit field, such as the IPv4 Time to Live (TTL), an
+   implementation MUST choose m and m' in one of the following ways.  It
+   gets the same result with either.
+
+   *  Use the whole 16-bit word that contains the field, before and
+      after the change.
+
+   *  Use the old and new octet as one half of a 16-bit value, with the
+      other half zero.  The octet goes in the half that it occupies in
+      the 16-bit word that contains the field.
+
+   In network byte order, the octet at the even offset of a word is its
+   high half, and the other octet is its low half.  On a little-endian
+   processor that loads words in native byte order, the two halves are
+   swapped.  An implementation can use either byte order, if HC, m, and
+   m' all use the same one (Section 3.3).
+
+   For a field that starts at an odd offset, an implementation can form
+   the 16-bit words that contain the field.  It can also sum the field
+   as if it were aligned, and swap the bytes of that partial sum before
+   using it in Eqn. 1.  The swap is correct because of byte order
+   independence (Section 3.3).
+
+   The TTL decrement in IPv4 routers is an example Section 4.2.2.5 of
+   [RFC1812].  The TTL shares a word with the Protocol field.  When a
+   router decrements the TTL, that word drops by 0x0100, so the router
+   computes HC' = ~(~HC +' 0xFEFF).
+
+4.7.  Changes to Pseudo-Header Fields
+
+   Translators change pseudo-header fields as follows.
+
+   *  NATs rewrite IPv4 addresses Section 4.2 of [RFC3022].
+
+   *  NPTv6 translators rewrite IPv6 prefixes [RFC6296].
+
+   *  IP/ICMP translators replace IPv4 headers with IPv6 headers, and
+      the reverse [RFC7915].
+
+   A translator that changes an IPv4 address has to update both the IPv4
+   header checksum and the transport checksum.  The sender computes the
+   IPv4 header checksum without the pseudo-header.  Therefore, the
+   translator updates each checksum separately, with Eqn. 1 and the same
+   m and m'.
+
+   A translator between IPv4 and IPv6 replaces the whole pseudo-header.
+   It can update the transport checksum with Eqn. 1.  The old words m
+   are the 6 words of the IPv4 pseudo-header.  The new words m' are the
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 13]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   20 words of the IPv6 pseudo-header (Section 4.5).  All steps of an
+   example are in Appendix A.4.  ICMPv4 has no pseudo-header, and ICMPv6
+   has one, so a translator between them adds the pseudo-header to the
+   sum or removes it.  It also accounts for the changed Type and Code
+   fields [RFC7915].
+
+4.8.  Reference Code
+
+   The following C function is an implementation of Eqn. 1 for n_old old
+   words and n_new new words.  The two counts can differ (Section 4.5).
+   The function is equivalent to the routine in RFC 1624 erratum 5865
+   (Section 7), extended to several words.  With a 32-bit accumulator,
+   it is correct while n_old + n_new is at most 65535.
+
+   <CODE BEGINS>
+   /* Eqn. 1: update checksum field hc when the n_old words in old
+    * are replaced by the n_new words in new. */
+   static uint16_t
+   csum_update(uint16_t hc, const uint16_t *old, size_t n_old,
+               const uint16_t *new, size_t n_new)
+   {
+       uint32_t sum = (uint16_t)~hc;
+       size_t i;
+
+       for (i = 0; i < n_old; i++)
+           sum += (uint16_t)~old[i];
+       for (i = 0; i < n_new; i++)
+           sum += new[i];
+       return (uint16_t)~csum_fold(sum);
+   }
+   <CODE ENDS>
+
+   Each complement is cast to uint16_t to keep it within 16 bits, as
+   Section 2 requires.  Without the casts, the results are wrong.
+   Section 5.4 adds the handling of the special values of Section 4.4.
+
+5.  Zero-Valued Checksum Fields
+
+   The meaning of the checksum field values 0x0000 and 0xFFFF depends on
+   the protocol.  Table 2 lists it for each protocol.
+
+
+
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 14]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+     +====================+======================+==================+
+     | Protocol           | 0x0000               | 0xFFFF           |
+     +====================+======================+==================+
+     | IPv4 header, ICMP, | computed checksum of | never sent by a  |
+     | ICMPv6, TCP, DCCP  | zero                 | correct sender   |
+     +--------------------+----------------------+------------------+
+     | UDP over IPv4      | no checksum          | computed         |
+     |                    |                      | checksum of zero |
+     +--------------------+----------------------+------------------+
+     | UDP over IPv6      | no checksum; allowed | computed         |
+     |                    | only as in [RFC6935] | checksum of zero |
+     |                    | and [RFC6936]        |                  |
+     +--------------------+----------------------+------------------+
+     | UDP-Lite           | never sent           | computed         |
+     |                    |                      | checksum of zero |
+     +--------------------+----------------------+------------------+
+
+       Table 2: Meaning of 0x0000 and 0xFFFF in the Checksum Field
+
+   In [RFC0768], a UDP sender transmits a computed checksum of 0x0000 as
+   0xFFFF.  A field of 0x0000 means that the sender computed no
+   checksum.  Section 8.1 of [RFC8200] forbids a field of 0x0000 for UDP
+   over IPv6, except under the conditions of [RFC6935] and [RFC6936].
+   [RFC3828] specifies the same transmission of a computed zero as
+   0xFFFF for UDP-Lite.
+
+   Sections 5.1 to 5.3 describe how an intermediate system handles a
+   field without a checksum, a result of 0x0000, and an incoming 0xFFFF.
+   Sections 5.4 and 5.5 give reference code and a branch-free variant.
+
+5.1.  Fields Without a Checksum
+
+   If an intermediate system applies Eqn. 1 to a UDP field of 0x0000, it
+   writes a non-zero value whenever any word changes.  No sender
+   computed that value, so it is not a valid checksum.  The receiver
+   discards a datagram that it would otherwise have accepted.  An
+   intermediate system MUST NOT apply Eqn. 1 to a UDP checksum field of
+   0x0000.
+
+   An intermediate system that finds a UDP checksum of 0x0000 can do one
+   of the following.
+
+   1.  Leave the field at 0x0000.  An intermediate system can do this
+       when the outgoing datagram may carry no checksum.  Examples are
+       UDP over IPv4, and UDP over IPv6 under the conditions of
+       [RFC6936].  It needs one comparison per datagram.
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 15]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   2.  Compute a checksum from scratch.  A translator does this when the
+       outgoing datagram has to carry a checksum, as in translation from
+       IPv4 to IPv6.  With no old checksum to start from, it cannot
+       update incrementally.  It needs the whole datagram, so it
+       reassembles a fragmented datagram first.
+
+   3.  Drop the datagram, and log the event.
+
+   Translators choose among options 2 and 3 as follows.
+
+   *  A stateless translator keeps no per-flow state.  It is expected to
+      offer a configuration choice between options 2 and 3 for
+      unfragmented datagrams.  It cannot compute the checksum of a
+      fragmented datagram, so it is expected to drop the first fragment
+      and log the event Section 4.5 of [RFC7915].
+
+   *  A stateful translator from IPv6 to IPv4 (NAT64) keeps state for
+      each flow.  It is required to reassemble the datagram and compute
+      the checksum if it has enough resources.  Otherwise, it is
+      required to discard the datagram silently Section 3.4 of
+      [RFC6146].
+
+   A translator that drops these datagrams loses little traffic.  In a
+   backbone trace, 769 fragmented UDP packets with a zero checksum were
+   seen among about 35 million IP packets.  All of them came from
+   malicious or broken senders Section 1.2 of [RFC2765].
+
+5.2.  Results Equal to Zero
+
+   When the true checksum is zero, the result of Eqn. 1 is 0x0000.  In
+   UDP, a receiver reads that value as "no checksum" and skips
+   verification.  An intermediate system that updates a UDP or UDP-Lite
+   checksum MUST therefore transmit 0xFFFF in place of a result of
+   0x0000.
+
+5.3.  Incoming 0xFFFF in Other Protocols
+
+   For the IPv4 header, ICMP, ICMPv6, TCP, and DCCP, a correct sender
+   never writes 0xFFFF.  An intermediate system that implements the RFC
+   1141 form can write it in place of 0x0000 (Section 4.2).  Section 4.3
+   proves Eqn. 1 correct only for a correctly computed HC, so its proof
+   does not cover this input.
+
+   With an incoming 0xFFFF, the result of Eqn. 1 is congruent to the
+   correct value.  In almost all cases, it is also the correct value, so
+   the error is repaired.  The exception is a change from m = 0xFFFF to
+   m' = 0x0000.  With that change, the sum stays the same, and the
+   result of Eqn. 1 is 0xFFFF again.
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 16]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   For these protocols, an intermediate system SHOULD write 0x0000 when
+   the result of Eqn. 1 is 0xFFFF.  An intermediate system that follows
+   this rule never writes a wrong value.  The true checksum is never
+   0xFFFF, and 0x0000 is the only other value congruent to it.  It needs
+   one comparison.  Receivers that verify the checksum as described in
+   Section 3.1 accept both encodings.  Thus, only receivers that
+   recompute and compare see a difference.
+
+   The rules in this section were tested in the same way as Eqn. 1
+   (Section 4.3).  In about 2.6 x 10^10 cases each, no wrong result was
+   found.
+
+5.4.  Reference Code
+
+   This section extends csum_update() from Section 4.8 with the rules of
+   Sections 5.1 to 5.3.
+
+   <CODE BEGINS>
+   /* IPv4 header, ICMP, ICMPv6, TCP, DCCP: never write 0xFFFF. */
+   static uint16_t
+   csum_update_plain(uint16_t hc, const uint16_t *old, size_t n_old,
+                     const uint16_t *new, size_t n_new)
+   {
+       uint16_t r = csum_update(hc, old, n_old, new, n_new);
+
+       return r == 0xffff ? 0 : r;
+   }
+
+   /* UDP, UDP-Lite: keep "no checksum", never write 0x0000. */
+   static uint16_t
+   csum_update_udp(uint16_t hc, const uint16_t *old, size_t n_old,
+                   const uint16_t *new, size_t n_new)
+   {
+       uint16_t r;
+
+       if (hc == 0)
+           return 0;
+       r = csum_update(hc, old, n_old, new, n_new);
+       return r == 0 ? 0xffff : r;
+   }
+   <CODE ENDS>
+
+   An implementation that is optimized for speed, and adds a precomputed
+   difference to every packet, still needs the test for 0x0000 in
+   csum_update_udp().  A translator that must produce a checksum handles
+   a field of 0x0000 before it calls this function (Section 5.1).
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 17]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+5.5.  Branch-Free Implementation
+
+   A hardware implementation, or a software implementation optimized for
+   speed, can avoid conditional branches.  For UDP and UDP-Lite, such an
+   implementation can start from the RFC 1141 form (Section 4.2), which
+   this document numbers Eqn. 3:
+
+       HC' = HC +' m +' ~m'                            (Eqn. 3)
+
+   Section 4.2 describes this form as incorrect, because its result is
+   sometimes -0 where +0 is correct.  For UDP, however, -0 is the
+   correct encoding of a zero checksum.  For a UDP field that holds a
+   checksum, the result of Eqn. 3 is therefore the value that a UDP
+   sender would transmit.  The proof is as follows.
+
+   1.  A field that holds a UDP checksum is never 0x0000.  With end-
+       around carry, a sum is +0 only when all its inputs are +0.
+       Therefore, the result of Eqn. 3 is never 0x0000.
+
+   2.  The result of Eqn. 3 is congruent to the correct checksum, and
+       the value that a UDP sender transmits is never 0x0000 either.
+       Two congruent values that are both different from 0x0000 are
+       equal (Section 4.3), so the result of Eqn. 3 equals the
+       transmitted value.
+
+   An implementation still has to keep a field of 0x0000 unchanged, and
+   it can do so with a mask instead of a branch.  The value (HC +
+   0xFFFF) >> 16 is 1 if HC is non-zero, and 0 otherwise.  For the other
+   protocols, an implementation uses a similar mask to replace a result
+   of 0xFFFF with 0x0000.
+
+   An implementation can also fold the carries without a loop, because
+   two folds are enough for a 32-bit sum.  After the first fold, the sum
+   is at most 0x1FFFE, and after the second, at most 0xFFFF.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 18]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   <CODE BEGINS>
+   /* Two folds reduce any 32-bit sum to 16 bits. */
+   static inline uint32_t
+   csum_fold2(uint32_t s)
+   {
+       s = (s & 0xffff) + (s >> 16);
+       s = (s & 0xffff) + (s >> 16);
+       return s;
+   }
+
+   /* UDP, UDP-Lite: Eqn. 3, and keep a field of 0x0000. */
+   static uint16_t
+   csum_update_udp_bf(uint16_t hc, const uint16_t *old, size_t n_old,
+                      const uint16_t *new, size_t n_new)
+   {
+       uint32_t sum = hc;
+       uint32_t keep;
+       size_t i;
+
+       for (i = 0; i < n_old; i++)
+           sum += old[i];
+       for (i = 0; i < n_new; i++)
+           sum += (uint16_t)~new[i];
+       sum = csum_fold2(sum);
+       /* keep is 0xFFFF if hc is non-zero, and 0 otherwise. */
+       keep = (0u - (((uint32_t)hc + 0xffff) >> 16)) & 0xffff;
+       return (uint16_t)(sum & keep);
+   }
+
+   /* IPv4 header, ICMP, ICMPv6, TCP, DCCP: Eqn. 1, never 0xFFFF. */
+   static uint16_t
+   csum_update_plain_bf(uint16_t hc, const uint16_t *old, size_t n_old,
+                        const uint16_t *new, size_t n_new)
+   {
+       uint32_t sum = (uint16_t)~hc;
+       uint32_t r;
+       size_t i;
+
+       for (i = 0; i < n_old; i++)
+           sum += (uint16_t)~old[i];
+       for (i = 0; i < n_new; i++)
+           sum += new[i];
+       r = ~csum_fold2(sum) & 0xffff;
+       /* (r + 1) >> 16 is 1 only if r is 0xFFFF. */
+       return (uint16_t)(r & (((r + 1) >> 16) - 1));
+   }
+   <CODE ENDS>
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 19]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   With a 32-bit accumulator, both functions are correct while n_old +
+   n_new is at most 65535.  The number of loop iterations depends only
+   on n_old and n_new, not on the values of the words.
+
+   Both functions were tested against full computation in the same way
+   as Eqn. 1, in about 2.6 x 10^10 cases each.  Further tests used 2 x
+   10^8 random updates of two to eight words.  No wrong result was found
+   in any of these tests.  When compiled with clang for arm64 and
+   x86-64, the single-word form of csum_update_udp_bf() has no
+   conditional instructions.  In csum_update_plain_bf(), the mask is
+   compiled to a conditional select instead of a branch.
+
+   An implementation uses the branch-free functions only where a field
+   of 0x0000 stays 0x0000 (Section 5.1).
+
+5.6.  Corruption of the Zero Encodings
+
+   In transit, a UDP checksum field of 0x0000 can be corrupted into a
+   non-zero value, and the receiver then discards the datagram.  A valid
+   checksum can also be corrupted into 0x0000.  In that case, the
+   receiver skips verification and misses any corruption in the rest of
+   the datagram.  A faulty intermediate system can make the same two
+   changes.  An intermediate system that follows the rules above makes
+   neither change.  A UDP receiver has no way to detect either change if
+   it happens in transit.  Section 3 of [RFC6936] discusses the effects
+   of corruption on datagrams with a zero UDP checksum over IPv6.
+
+5.7.  Partial Coverage
+
+   In UDP-Lite and DCCP [RFC4340], the sender can limit the checksum to
+   the start of the packet.  An intermediate system that changes only
+   data after that point does not update the checksum.
+
+6.  Techniques for Avoiding Checksum Updates
+
+   Protocol specifications avoid computing or updating the checksum in
+   several ways.  The following subsections describe each technique and
+   its limits.  This document does not recommend any of them in place of
+   incremental update.
+
+6.1.  Checksum-Neutral Address Mapping
+
+   An address rewrite is checksum neutral if the old and new addresses
+   have the same ones' complement sum.  After a neutral rewrite, a
+   translator does not need to change the IPv4 header checksum or any
+   transport checksum.  This holds even in packets where the translator
+   cannot reach the transport header, such as non-initial fragments.
+   Several RFCs use or discuss this technique.
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 20]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   *  An IPv6-to-IPv6 Network Prefix Translation (NPTv6) translator
+      makes each prefix rewrite neutral Section 2.6 of [RFC6296].  It
+      adjusts one 16-bit word of the address, outside the rewritten
+      prefix.
+
+   *  Section 4.1 of [RFC6052] considers reserving 16 bits of the
+      address suffix for checksum neutrality, and rejects it.  The Well-
+      Known Prefix 64:ff9b::/96 is neutral, because its words sum to -0.
+      Other prefixes are generally not neutral.
+
+   *  Section 6 of [RFC8215] gives the conditions under which prefixes
+      within 64:ff9b:1::/48 are neutral.
+
+   *  The IVI translators deployed in the China Education and Research
+      Network (CERNET) use neutral mappings [RFC6219].
+
+   *  Section 6 of [RFC7757] notes that explicit address mappings are,
+      in general, not neutral.
+
+   For a neutral mapping, the operator has to choose both of its
+   addresses accordingly.  In stateful translation, at most one of the
+   two addresses can be neutral Section 4.1 of [RFC6052].
+
+6.2.  Checksum Complement Fields
+
+   Some protocol specifications expect an intermediate system to change
+   the UDP payload, usually to insert a timestamp.  Such a specification
+   can reserve a 16-bit "Checksum Complement" field for this purpose.
+   The intermediate system writes a value into this field to cancel its
+   own change, so the UDP checksum stays valid.  [RFC7820] defines such
+   a field for the One-Way and Two-Way Active Measurement Protocols
+   (OWAMP and TWAMP).  [RFC7821] defines one for the Network Time
+   Protocol (NTP), and [RFC9197] for In situ Operations, Administration,
+   and Maintenance (IOAM).  The intermediate system uses Eqn. 1 to find
+   the field value for which the total change is zero.
+
+   Active measurement probers use the same method.  A prober has to keep
+   the flow identity of its probes constant, so that load balancers send
+   them all on one path.  The prober changes the ICMP identifier and
+   sequence number of each probe.  It then chooses payload bytes so that
+   the ICMP checksum stays constant Section 4.1 of [RFC9198].
+
+
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 21]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+6.3.  Zero UDP Checksum
+
+   Over IPv4, a UDP sender may omit the checksum [RFC0768].  Endpoints
+   of UDP-based tunnels often do this, and rely on the checksums of the
+   inner packet.  Virtual eXtensible Local Area Network (VXLAN)
+   [RFC7348], Generic Routing Encapsulation (GRE) in UDP [RFC8086], and
+   Generic Network Virtualization Encapsulation (Geneve) [RFC8926] are
+   examples.  For IPv6, [RFC6935] updates [RFC8200] to allow zero UDP
+   checksums for tunneled packets.  Tunnel endpoints may use them only
+   under the constraints in [RFC6936].  Section 3.4 of [RFC8085] gives
+   general guidance on when a zero UDP checksum is acceptable.
+
+   An intermediate system that updates or validates UDP checksums by the
+   rules of [RFC8200] drops IPv6 datagrams with a zero UDP checksum.
+   Section 7.1 of [RFC8086] notes that all traffic of the tunnel can
+   then be lost without any error report.  Section 5 of [RFC6936]
+   specifies requirements for such systems, which it calls middleboxes.
+   For example, a middlebox is required to forward datagrams with zero
+   and non-zero checksums on the same port.  It also has to keep the
+   same flow state for both.
+
+6.4.  Header Compression
+
+   With some header compression schemes, the compressor drops a checksum
+   before the link, and the decompressor regenerates it at the far end.
+
+   *  In TCP/IP header compression for serial links [RFC1144], the
+      compressor drops the IPv4 header checksum, and the decompressor
+      regenerates it.  The compressor sends the TCP checksum unchanged.
+
+   *  In header compression for IPv6 over Low-Power Wireless Personal
+      Area Networks (6LoWPAN) [RFC6282], the compressor may drop the UDP
+      checksum, and the decompressor recomputes it.  The same holds for
+      Static Context Header Compression (SCHC) Section 10.11 of
+      [RFC8724].  The compressor may do this only when the UDP payload
+      and pseudo-header have integrity protection at an upper layer.
+
+   When the decompressor regenerates the checksum, the receiver gets
+   error detection only for the path after the decompressor.  In Robust
+   Header Compression (ROHC) [RFC3095], the compressor sends a non-zero
+   UDP checksum across the link.  The decompressor uses that checksum to
+   check that it has restored its context correctly after an error.  The
+   context is the state that the compressor and decompressor share.
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 22]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+6.5.  Alternative Algorithms
+
+   A receiver that checks the Internet checksum misses some error
+   patterns that a CRC would catch.  Therefore, some protocols use
+   CRC32c, the 32-bit CRC with the Castagnoli polynomial.  [RFC3309]
+   replaces the Adler-32 checksum of the Stream Control Transmission
+   Protocol (SCTP) with CRC32c, and the current SCTP specification
+   [RFC9260] keeps it.  [RFC3385] compares CRCs, including CRC32c, with
+   other checksums, to support the choice of an error detection code for
+   Internet SCSI (iSCSI).  An implementation cannot update a CRC with
+   simple arithmetic, the way it updates the Internet checksum with Eqn.
+   1.  An intermediate system that changes such a packet must recompute
+   the CRC, or use more complex incremental CRC methods.
+
+7.  Analysis of the Errata to RFC 1624
+
+   Three errata against [RFC1624] are in the state "Held for Document
+   Update".  This section analyzes each of them.
+
+   Erratum 4782:  The erratum reports that Eqn. 3 of RFC 1624 (Eqn. 1
+      here) turns a checksum of 0x0000 into 0xFFFF when m equals m'.
+      The reported case is HC = 0x0000 and m = m' = 0x5555.  In the
+      report, the sum 0xFFFF + 0xAAAA + 0x5555 is 0x0000.  That value is
+      what a reduction modulo 0xFFFF gives, because such a reduction
+      writes zero as +0.  Ones' complement addition gives 0xFFFF +'
+      0xAAAA = 0xAAAA, and 0xAAAA +' 0x5555 = 0xFFFF.  Thus, HC' =
+      ~0xFFFF = 0x0000, and the checksum stays unchanged (Appendix A.6).
+      Eqn. 3 of RFC 1624 is correct in this case, so the erratum does
+      not show a defect in RFC 1624.  The erratum proposes to skip the
+      update when m equals m', but that restriction is not needed.  Its
+      "corrected text" is identical to the original.  Errata 5864 and
+      5865 respond to this erratum.  Erratum 5864 shows the correct
+      evaluation, and both errata define "+" so that readers do not
+      repeat the error.
+
+   Erratum 5864:  This erratum defines the "+" of RFC 1624 as ones'
+      complement addition (+' in this document).  It also gives a loop
+      for folding the carries on 32-bit processors.  The erratum
+      includes a case in which a 32-bit implementation has to fold
+      twice.  With HC = 0x0000, m = 0x5555, and m' = 0x5556, the 32-bit
+      sum 0xFFFF + 0xAAAA + 0x5556 is 0x1FFFF.  After two folds, the sum
+      is 0x0001, so HC' = 0xFFFE (Appendix A.7).  Section 2 and
+      Section 3.3 include both points.  The code in this erratum does
+      not limit the complement to 16 bits, and erratum 5865 corrects
+      this.
+
+   Erratum 5865:  This erratum replaces erratum 5864.  It adds that, on
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 23]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+      processors with words wider than 16 bits, an implementation limits
+      each complement to 16 bits.  The routine in this erratum is as
+      follows:
+
+      HCnew = (HCorig xor 0xFFFF) + (valueorig xor 0xFFFF) + valuenew
+      while (HCnew > 0xFFFF) {
+          HCnew = (HCnew & 0xFFFF) + (HCnew >> 16)
+      }
+      HCnew = (HCnew xor 0xFFFF)
+
+      It is equivalent to the code in Section 4.8.
+
+8.  Problems in RFC 1624 That No Erratum Reports
+
+   [Note: This section is for discussion in the working group.  A future
+   revision of this document may remove it, or report its items as
+   errata against RFC 1624.]
+
+   Wrong cross-reference:  Section 5 of RFC 1624 cites "Sec. 7" for
+      subtraction with borrow.  Section 7 of RFC 1624 is the
+      acknowledgments, and the intended target is Section 6, "Historical
+      Note".
+
+   The argument for +0 and UDP:  Section 3 of RFC 1624 argues that a
+      checksum field never holds 0xFFFF, because the IPv4 header always
+      has a non-zero field.  The argument holds for the IPv4 header and
+      TCP.  It does not hold for UDP, where a sender transmits a
+      computed zero as 0xFFFF, and 0x0000 means "no checksum".  An
+      intermediate system that applies Eqn. 3 of RFC 1624 to UDP as
+      written can turn a valid checksum into "no checksum".  Section 5.1
+      and Section 5.2 give the rules for UDP.
+
+   Incoming 0xFFFF:  RFC 1624 does not say what an intermediate system
+      does with an incoming 0xFFFF in a protocol where a correct sender
+      never writes it.  An implementation of the RFC 1141 form can leave
+      this value.  Section 5.3 gives a rule for it.
+
+   Fields that are not aligned 16-bit words:  RFC 1624 describes the
+      update of one aligned 16-bit word.  It does not cover 8-bit fields
+      such as the TTL, fields at odd offsets, or fields of several
+      words.  Section 4.5 and Section 4.6 cover these fields.
+
+   Subtraction with end-around borrow:  Eqn. 4 of RFC 1624 (Eqn. 2 here)
+      is correct only with subtraction with end-around borrow.  RFC 1624
+      describes this subtraction in one sentence, which has the wrong
+      cross-reference above.  Section 4.3 states the requirement and a
+      common mistake.
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 24]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   Data with no non-zero word:  The argument in Section 3 of RFC 1624
+      assumes that the covered data has a non-zero word, but RFC 1624
+      does not state this as a condition of Eqn. 3.  The condition holds
+      for the IPv4 header, and for every checksum that covers a pseudo-
+      header.  It can fail for ICMP over IPv4.  For example, an Echo
+      Reply with an Identifier and Sequence Number of zero and no data
+      is all zero, so its correct checksum is 0xFFFF.  If a NAT changes
+      the Identifier to zero in such a message, the result of Eqn. 3 is
+      0x0000.  A receiver that sums all the words gets +0 and discards
+      the message.
+
+      This case also affects this document.  Section 4.3 states the
+      condition, but does not say what an implementation does when the
+      condition fails.  Section 5.3 lists ICMP among the protocols in
+      which a correct sender never writes 0xFFFF.  For ICMP over IPv4,
+      that statement is false.  In the example above, an intermediate
+      system that follows the rule in Section 5.3 writes no other value,
+      because Eqn. 1 already gives 0x0000.
+
+      A future revision could remove ICMP over IPv4 from the list in
+      Section 5.3.  It could also require that, for ICMP over IPv4, an
+      intermediate system either write 0xFFFF when the new message is
+      all zero, or compute the checksum in full.
+
+9.  Summary of Requirements
+
+   This section lists the requirements of this document, with the
+   section that gives the reasoning for each.  The sections themselves
+   are authoritative.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 25]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+      +==================================================+=========+
+      | Requirement                                      | Section |
+      +==================================================+=========+
+      | Receivers SHOULD NOT verify a checksum by        | Section |
+      | recomputing it and comparing it with the field.  | 3.1     |
+      +--------------------------------------------------+---------+
+      | An implementation that folds carries MUST repeat | Section |
+      | the fold until the sum fits in 16 bits.          | 3.3     |
+      +--------------------------------------------------+---------+
+      | Intermediate systems SHOULD update checksums     | Section |
+      | incrementally, unless they have verified the     | 4.1     |
+      | incoming checksum.                               |         |
+      +--------------------------------------------------+---------+
+      | An implementation that updates a checksum        | Section |
+      | incrementally SHOULD use Eqn. 1.                 | 4.3     |
+      +--------------------------------------------------+---------+
+      | An intermediate system MUST apply the rules of   | Section |
+      | Section 5 together with Eqn. 1.                  | 4.4     |
+      +--------------------------------------------------+---------+
+      | To update an 8-bit field, an implementation MUST | Section |
+      | take m and m' as either the whole 16-bit word or | 4.6     |
+      | the octet in its correct half of the word.       |         |
+      +--------------------------------------------------+---------+
+      | An intermediate system MUST NOT apply Eqn. 1 to  | Section |
+      | a UDP checksum field of 0x0000.                  | 5.1     |
+      +--------------------------------------------------+---------+
+      | An intermediate system that updates a UDP or     | Section |
+      | UDP-Lite checksum MUST transmit 0xFFFF when the  | 5.2     |
+      | result of Eqn. 1 is 0x0000.                      |         |
+      +--------------------------------------------------+---------+
+      | For the IPv4 header, ICMP, ICMPv6, TCP, and      | Section |
+      | DCCP, an intermediate system SHOULD write 0x0000 | 5.3     |
+      | when the result of Eqn. 1 is 0xFFFF.             |         |
+      +--------------------------------------------------+---------+
+
+                     Table 3: Summary of Requirements
+
+10.  Security Considerations
+
+   With the Internet checksum, a receiver detects accidental corruption
+   only.  Anyone who can change a packet can also update its checksum.
+   With checksum-neutral rewriting or checksum complement fields
+   (Section 6), an intermediate system changes a packet and keeps the
+   checksum valid.  Protocol designers who need integrity protection
+   have to use cryptographic mechanisms.
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 26]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   Implementers can weaken the error detection of the checksum.  An
+   intermediate system that recomputes a checksum can hide corruption
+   that happened before or inside it (Section 4.1).  An intermediate
+   system that applies Eqn. 1 to UDP without the rules in Section 5 can
+   turn off checksum verification at the receiver.  It can also make the
+   receiver discard valid datagrams sent without a checksum.
+
+11.  IANA Considerations
+
+   This document has no IANA actions.
+
+12.  References
+
+12.1.  Normative References
+
+   [RFC0768]  Postel, J., "User Datagram Protocol", STD 6, RFC 768,
+              DOI 10.17487/RFC768, August 1980,
+              <https://www.rfc-editor.org/info/rfc768>.
+
+   [RFC0791]  Postel, J., "Internet Protocol", STD 5, RFC 791,
+              DOI 10.17487/RFC791, September 1981,
+              <https://www.rfc-editor.org/info/rfc791>.
+
+   [RFC1071]  Braden, R., Borman, D., and C. Partridge, "Computing the
+              Internet checksum", RFC 1071, DOI 10.17487/RFC1071,
+              September 1988, <https://www.rfc-editor.org/info/rfc1071>.
+
+   [RFC1624]  Rijsinghani, A., Ed., "Computation of the Internet
+              Checksum via Incremental Update", RFC 1624,
+              DOI 10.17487/RFC1624, May 1994,
+              <https://www.rfc-editor.org/info/rfc1624>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+   [RFC8200]  Deering, S. and R. Hinden, "Internet Protocol, Version 6
+              (IPv6) Specification", STD 86, RFC 8200,
+              DOI 10.17487/RFC8200, July 2017,
+              <https://www.rfc-editor.org/info/rfc8200>.
+
+12.2.  Informative References
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 27]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   [RFC0792]  Postel, J., "Internet Control Message Protocol", STD 5,
+              RFC 792, DOI 10.17487/RFC792, September 1981,
+              <https://www.rfc-editor.org/info/rfc792>.
+
+   [RFC0817]  Clark, D., "Modularity and efficiency in protocol
+              implementation", RFC 817, DOI 10.17487/RFC817, July 1982,
+              <https://www.rfc-editor.org/info/rfc817>.
+
+   [RFC1141]  Mallory, T. and A. Kullberg, "Incremental updating of the
+              Internet checksum", RFC 1141, DOI 10.17487/RFC1141,
+              January 1990, <https://www.rfc-editor.org/info/rfc1141>.
+
+   [RFC1144]  Jacobson, V., "Compressing TCP/IP Headers for Low-Speed
+              Serial Links", RFC 1144, DOI 10.17487/RFC1144, February
+              1990, <https://www.rfc-editor.org/info/rfc1144>.
+
+   [RFC1812]  Baker, F., Ed., "Requirements for IP Version 4 Routers",
+              RFC 1812, DOI 10.17487/RFC1812, June 1995,
+              <https://www.rfc-editor.org/info/rfc1812>.
+
+   [RFC1936]  Touch, J. and B. Parham, "Implementing the Internet
+              Checksum in Hardware", RFC 1936, DOI 10.17487/RFC1936,
+              April 1996, <https://www.rfc-editor.org/info/rfc1936>.
+
+   [RFC2765]  Nordmark, E., "Stateless IP/ICMP Translation Algorithm
+              (SIIT)", RFC 2765, DOI 10.17487/RFC2765, February 2000,
+              <https://www.rfc-editor.org/info/rfc2765>.
+
+   [RFC3022]  Srisuresh, P. and K. Egevang, "Traditional IP Network
+              Address Translator (Traditional NAT)", RFC 3022,
+              DOI 10.17487/RFC3022, January 2001,
+              <https://www.rfc-editor.org/info/rfc3022>.
+
+   [RFC3095]  Bormann, C., Burmeister, C., Degermark, M., Fukushima, H.,
+              Hannu, H., Jonsson, L., Hakenberg, R., Koren, T., Le, K.,
+              Liu, Z., Martensson, A., Miyazaki, A., Svanbro, K.,
+              Wiebke, T., Yoshimura, T., and H. Zheng, "RObust Header
+              Compression (ROHC): Framework and four profiles: RTP, UDP,
+              ESP, and uncompressed", RFC 3095, DOI 10.17487/RFC3095,
+              July 2001, <https://www.rfc-editor.org/info/rfc3095>.
+
+   [RFC3309]  Stone, J., Stewart, R., and D. Otis, "Stream Control
+              Transmission Protocol (SCTP) Checksum Change", RFC 3309,
+              DOI 10.17487/RFC3309, September 2002,
+              <https://www.rfc-editor.org/info/rfc3309>.
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 28]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   [RFC3385]  Sheinwald, D., Satran, J., Thaler, P., and V. Cavanna,
+              "Internet Protocol Small Computer System Interface (iSCSI)
+              Cyclic Redundancy Check (CRC)/Checksum Considerations",
+              RFC 3385, DOI 10.17487/RFC3385, September 2002,
+              <https://www.rfc-editor.org/info/rfc3385>.
+
+   [RFC3828]  Larzon, L., Degermark, M., Pink, S., Jonsson, L., Ed., and
+              G. Fairhurst, Ed., "The Lightweight User Datagram Protocol
+              (UDP-Lite)", RFC 3828, DOI 10.17487/RFC3828, July 2004,
+              <https://www.rfc-editor.org/info/rfc3828>.
+
+   [RFC4340]  Kohler, E., Handley, M., and S. Floyd, "Datagram
+              Congestion Control Protocol (DCCP)", RFC 4340,
+              DOI 10.17487/RFC4340, March 2006,
+              <https://www.rfc-editor.org/info/rfc4340>.
+
+   [RFC4443]  Conta, A., Deering, S., and M. Gupta, Ed., "Internet
+              Control Message Protocol (ICMPv6) for the Internet
+              Protocol Version 6 (IPv6) Specification", STD 89,
+              RFC 4443, DOI 10.17487/RFC4443, March 2006,
+              <https://www.rfc-editor.org/info/rfc4443>.
+
+   [RFC6052]  Bao, C., Huitema, C., Bagnulo, M., Boucadair, M., and X.
+              Li, "IPv6 Addressing of IPv4/IPv6 Translators", RFC 6052,
+              DOI 10.17487/RFC6052, October 2010,
+              <https://www.rfc-editor.org/info/rfc6052>.
+
+   [RFC6146]  Bagnulo, M., Matthews, P., and I. van Beijnum, "Stateful
+              NAT64: Network Address and Protocol Translation from IPv6
+              Clients to IPv4 Servers", RFC 6146, DOI 10.17487/RFC6146,
+              April 2011, <https://www.rfc-editor.org/info/rfc6146>.
+
+   [RFC6219]  Li, X., Bao, C., Chen, M., Zhang, H., and J. Wu, "The
+              China Education and Research Network (CERNET) IVI
+              Translation Design and Deployment for the IPv4/IPv6
+              Coexistence and Transition", RFC 6219,
+              DOI 10.17487/RFC6219, May 2011,
+              <https://www.rfc-editor.org/info/rfc6219>.
+
+   [RFC6282]  Hui, J., Ed. and P. Thubert, "Compression Format for IPv6
+              Datagrams over IEEE 802.15.4-Based Networks", RFC 6282,
+              DOI 10.17487/RFC6282, September 2011,
+              <https://www.rfc-editor.org/info/rfc6282>.
+
+   [RFC6296]  Wasserman, M. and F. Baker, "IPv6-to-IPv6 Network Prefix
+              Translation", RFC 6296, DOI 10.17487/RFC6296, June 2011,
+              <https://www.rfc-editor.org/info/rfc6296>.
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 29]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   [RFC6935]  Eubanks, M., Chimento, P., and M. Westerlund, "IPv6 and
+              UDP Checksums for Tunneled Packets", RFC 6935,
+              DOI 10.17487/RFC6935, April 2013,
+              <https://www.rfc-editor.org/info/rfc6935>.
+
+   [RFC6936]  Fairhurst, G. and M. Westerlund, "Applicability Statement
+              for the Use of IPv6 UDP Datagrams with Zero Checksums",
+              RFC 6936, DOI 10.17487/RFC6936, April 2013,
+              <https://www.rfc-editor.org/info/rfc6936>.
+
+   [RFC7348]  Mahalingam, M., Dutt, D., Duda, K., Agarwal, P., Kreeger,
+              L., Sridhar, T., Bursell, M., and C. Wright, "Virtual
+              eXtensible Local Area Network (VXLAN): A Framework for
+              Overlaying Virtualized Layer 2 Networks over Layer 3
+              Networks", RFC 7348, DOI 10.17487/RFC7348, August 2014,
+              <https://www.rfc-editor.org/info/rfc7348>.
+
+   [RFC7757]  Anderson, T. and A. Leiva Popper, "Explicit Address
+              Mappings for Stateless IP/ICMP Translation", STD 103,
+              RFC 7757, DOI 10.17487/RFC7757, February 2016,
+              <https://www.rfc-editor.org/info/rfc7757>.
+
+   [RFC7820]  Mizrahi, T., "UDP Checksum Complement in the One-Way
+              Active Measurement Protocol (OWAMP) and Two-Way Active
+              Measurement Protocol (TWAMP)", RFC 7820,
+              DOI 10.17487/RFC7820, March 2016,
+              <https://www.rfc-editor.org/info/rfc7820>.
+
+   [RFC7821]  Mizrahi, T., "UDP Checksum Complement in the Network Time
+              Protocol (NTP)", RFC 7821, DOI 10.17487/RFC7821, March
+              2016, <https://www.rfc-editor.org/info/rfc7821>.
+
+   [RFC7915]  Bao, C., Li, X., Baker, F., Anderson, T., and F. Gont,
+              "IP/ICMP Translation Algorithm", RFC 7915,
+              DOI 10.17487/RFC7915, June 2016,
+              <https://www.rfc-editor.org/info/rfc7915>.
+
+   [RFC8085]  Eggert, L., Fairhurst, G., and G. Shepherd, "UDP Usage
+              Guidelines", BCP 145, RFC 8085, DOI 10.17487/RFC8085,
+              March 2017, <https://www.rfc-editor.org/info/rfc8085>.
+
+   [RFC8086]  Yong, L., Ed., Crabbe, E., Xu, X., and T. Herbert, "GRE-
+              in-UDP Encapsulation", RFC 8086, DOI 10.17487/RFC8086,
+              March 2017, <https://www.rfc-editor.org/info/rfc8086>.
+
+   [RFC8215]  Anderson, T., "Local-Use IPv4/IPv6 Translation Prefix",
+              RFC 8215, DOI 10.17487/RFC8215, August 2017,
+              <https://www.rfc-editor.org/info/rfc8215>.
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 30]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+   [RFC8724]  Minaburo, A., Toutain, L., Gomez, C., Barthel, D., and JC.
+              Zuniga, "SCHC: Generic Framework for Static Context Header
+              Compression and Fragmentation", RFC 8724,
+              DOI 10.17487/RFC8724, April 2020,
+              <https://www.rfc-editor.org/info/rfc8724>.
+
+   [RFC8926]  Gross, J., Ed., Ganga, I., Ed., and T. Sridhar, Ed.,
+              "Geneve: Generic Network Virtualization Encapsulation",
+              RFC 8926, DOI 10.17487/RFC8926, November 2020,
+              <https://www.rfc-editor.org/info/rfc8926>.
+
+   [RFC9197]  Brockners, F., Ed., Bhandari, S., Ed., and T. Mizrahi,
+              Ed., "Data Fields for In Situ Operations, Administration,
+              and Maintenance (IOAM)", RFC 9197, DOI 10.17487/RFC9197,
+              May 2022, <https://www.rfc-editor.org/info/rfc9197>.
+
+   [RFC9198]  Alvarez-Hamelin, J., Morton, A., Fabini, J., Pignataro,
+              C., and R. Geib, "Advanced Unidirectional Route Assessment
+              (AURA)", RFC 9198, DOI 10.17487/RFC9198, May 2022,
+              <https://www.rfc-editor.org/info/rfc9198>.
+
+   [RFC9260]  Stewart, R., Tüxen, M., and K. Nielsen, "Stream Control
+              Transmission Protocol", RFC 9260, DOI 10.17487/RFC9260,
+              June 2022, <https://www.rfc-editor.org/info/rfc9260>.
+
+   [RFC9293]  Eddy, W., Ed., "Transmission Control Protocol (TCP)",
+              STD 7, RFC 9293, DOI 10.17487/RFC9293, August 2022,
+              <https://www.rfc-editor.org/info/rfc9293>.
+
+Appendix A.  Test Vectors
+
+   Each vector in this appendix gives the input values, every step of
+   the update, and the result of a full computation.  An implementer can
+   check each step without another document.
+
+   The following conventions apply to all vectors:
+
+   *  All values are hexadecimal.
+
+   *  "+'" is ones' complement addition (Section 2).  When an addition
+      produces a carry, the 17-bit sum is shown in parentheses, before
+      the carry is added back.
+
+   *  "Recomputed" marks the result of a full computation (Section 2).
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 31]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+A.1.  IPv4 Header Checksum
+
+   The following IPv4 header carries a UDP datagram from 192.0.2.1 to
+   198.51.100.7.  The checksum field is zero while the checksum is
+   computed.
+
+       Word   Field
+       4500   Version 4, IHL 5, DSCP and ECN 0
+       0073   Total Length
+       0000   Identification
+       4000   Flags (DF), Fragment Offset 0
+       4011   TTL 40, Protocol 11 (UDP)
+       0000   Header Checksum (zero during computation)
+       c000   Source Address 192.0.2.1, high word
+       0201   Source Address 192.0.2.1, low word
+       c633   Destination Address 198.51.100.7, high word
+       6407   Destination Address 198.51.100.7, low word
+
+   The 32-bit sum of the ten words is 2B1BF.  After the carry is folded,
+   the sum is B1BF + 2 = B1C1.  The header checksum is therefore ~B1C1 =
+   4E3E.  This header is the starting point for the next two vectors.
+
+A.2.  TTL Decrement
+
+   A router decrements the TTL of the header in Appendix A.1 from 40 to
+   3F.  The word that contains the TTL and the Protocol changes from m =
+   4011 to m' = 3F11.  The update with Eqn. 1 has the following steps:
+
+       ~HC                   = ~4E3E          = B1C1
+       ~m                    = ~4011          = BFEE
+       B1C1 +' BFEE          = 71B0  (171AF)
+       71B0 +' 3F11 (m')     = B0C1
+       HC' = ~B0C1           = 4F3E
+
+   Recomputed: the 32-bit sum of the changed header is 2B0BF, which
+   folds to B0C1, so the checksum is 4F3E, as with Eqn. 1.
+
+   The result is also 4F3E with two other forms of the update in
+   Section 4.6:
+
+   *  With the TTL octet as the high half of a 16-bit value: m = 4000,
+      m' = 3F00.  B1C1 +' BFFF = 71C1, and 71C1 +' 3F00 = B0C1, so HC' =
+      4F3E.
+
+   *  With the precomputed router form HC' = ~(~HC +' FEFF): B1C1 +'
+      FEFF = B0C1 (1B0C0), so HC' = 4F3E.
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 32]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+A.3.  Source Address Rewrite
+
+   A translator rewrites the source address of the header in
+   Appendix A.1 from 192.0.2.1 (c000 0201) to 203.0.113.5 (cb00 7105).
+   Two words change, so the translator uses the form of Section 4.5:
+
+       ~HC                   = ~4E3E          = B1C1
+       B1C1 +' 3FFF (~C000)  = F1C0
+       F1C0 +' FDFE (~0201)  = EFBF  (1EFBE)
+       EFBF +' CB00          = BAC0  (1BABF)
+       BAC0 +' 7105          = 2BC6  (12BC5)
+       HC' = ~2BC6           = D439
+
+   Recomputed: the 32-bit sum of the changed header is 32BC3, which
+   folds to 2BC6, so the checksum is D439, as with Eqn. 1.
+
+A.4.  Pseudo-Header Replacement
+
+   A translator forwards a UDP datagram from IPv4 to IPv6.  The IPv4
+   addresses are mapped into IPv6 with the prefix 2001:db8::/96, so
+   192.0.2.1 becomes 2001:db8::c000:201, and 198.51.100.7 becomes
+   2001:db8::c633:6407.  The UDP header and payload are the following 8
+   words:
+
+       1234   Source Port
+       0035   Destination Port
+       0010   Length (16 octets)
+       xxxx   Checksum
+       6162 6364 6566 6768   Payload "abcdefgh"
+
+   These 8 words sum to A40E, with the checksum field zero.  The two
+   pseudo-headers have 6 and 20 words:
+
+       IPv4 (6 words):   c000 0201  c633 6407  0011  0010
+                         (source, destination, zero and Protocol,
+                         Length)
+       IPv6 (20 words):  2001 0db8 0000 0000 0000 0000 c000 0201
+                         2001 0db8 0000 0000 0000 0000 c633 6407
+                         0000 0010  0000 0011
+                         (source, destination, Length, zero and
+                         Next Header)
+
+   The IPv4 pseudo-header sums to EC5D.  Thus, the checksum over IPv4 is
+   ~(EC5D +' A40E) = ~906C = 6F93.  The translator removes the 6 IPv4
+   words from the sum and adds the 20 IPv6 words.  The words 0000 do not
+   change the sum, so they are left out below:
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 33]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+       ~HC                   = ~6F93          = 906C
+       906C +' 3FFF (~C000)  = D06B
+       D06B +' FDFE (~0201)  = CE6A  (1CE69)
+       CE6A +' 39CC (~C633)  = 0837  (10836)
+       0837 +' 9BF8 (~6407)  = A42F
+       A42F +' FFEE (~0011)  = A41E  (1A41D)
+       A41E +' FFEF (~0010)  = A40E  (1A40D)
+       A40E +' 2001          = C40F
+       C40F +' 0DB8          = D1C7
+       D1C7 +' C000          = 91C8  (191C7)
+       91C8 +' 0201          = 93C9
+       93C9 +' 2001          = B3CA
+       B3CA +' 0DB8          = C182
+       C182 +' C633          = 87B6  (187B5)
+       87B6 +' 6407          = EBBD
+       EBBD +' 0010          = EBCD
+       EBCD +' 0011          = EBDE
+       HC' = ~EBDE           = 1421
+
+   After the six removals, the sum is A40E, which is the sum of the UDP
+   words alone.  Recomputed: the IPv6 pseudo-header sums to 47D0, so the
+   checksum over IPv6 is ~(47D0 +' A40E) = ~EBDE = 1421, as with Eqn. 1.
+
+A.5.  The RFC 1624 Example
+
+   This vector is the example of [RFC1624], reproduced here with all
+   steps.  One word changes from m = 5555 to m' = 3285.  The ones'
+   complement sum of all the other words of the header is CD7A.
+
+       Old checksum:  CD7A +' 5555  = 22D0  (122CF)   HC  = ~22D0 = DD2F
+       Full, new:     CD7A +' 3285  = FFFF            HC' = ~FFFF = 0000
+
+   With Eqn. 1, the result is correct:
+
+       ~HC                   = ~DD2F          = 22D0
+       22D0 +' AAAA (~5555)  = CD7A
+       CD7A +' 3285          = FFFF
+       HC' = ~FFFF           = 0000
+
+   The result of Eqn. 2 with end-around borrow is also 0000.  Neither
+   subtraction borrows:
+
+       DD2F -' AAAA (~5555)  = 3285
+       3285 -' 3285          = 0000
+
+   For the RFC 1141 form, HC' = HC +' m +' ~m', the result is FFFF:
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 34]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+       DD2F +' 5555          = 3285  (13284)
+       3285 +' CD7A (~3285)  = FFFF
+
+   For the IPv4 header, ICMP, and TCP, FFFF is wrong, because a correct
+   sender writes 0000.  For UDP, the result of the full computation is
+   also 0000, and the sender transmits FFFF instead, as required in
+   Section 5.2.  Thus, for UDP, FFFF is the correct field value
+   (Section 5.5).
+
+A.6.  Erratum 4782
+
+   Erratum 4782 reports the following case as a failure.  The checksum
+   is HC = 0000, and a word is "changed" from m = 5555 to the same value
+   m' = 5555.  According to the erratum, the result of Eqn. 1 is FFFF.
+   With end-around carry, the checksum stays unchanged:
+
+       ~HC                   = ~0000          = FFFF
+       FFFF +' AAAA (~5555)  = AAAA  (1AAA9)
+       AAAA +' 5555          = FFFF
+       HC' = ~FFFF           = 0000
+
+   A reduction of the sum FFFF + AAAA + 5555 = 1FFFE modulo FFFF gives
+   0000, so the result is ~0000 = FFFF, as in the erratum.  The
+   reduction writes zero as +0.  It therefore gives a wrong result
+   whenever the correct checksum is 0000.  The RFC 1141 form makes the
+   same kind of error.  Without end-around carry, 1FFFE is cut to FFFE,
+   and the result is ~FFFE = 0001, which is also wrong.
+
+A.7.  Erratum 5864: Two Folds
+
+   Erratum 5864 gives the following case.  The other words sum to AAAA,
+   and m = 5555, so the sum of all words is FFFF and HC = 0000.  The
+   word changes to m' = 5556.  An implementation that uses a 32-bit
+   register has to fold twice:
+
+       FFFF (~HC) + AAAA (~m) + 5556 (m')  = 1FFFF
+       First fold:    FFFF + 1             = 10000
+       Second fold:   0000 + 1             = 0001
+       HC' = ~0001                         = FFFE
+
+   Recomputed: AAAA +' 5556 = 0001 (10000), so the checksum is FFFE, as
+   with Eqn. 1.  An implementation that stops after one fold keeps the
+   low 16 bits of 10000, which are 0000, and writes the wrong value
+   ~0000 = FFFF.
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 35]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+A.8.  Zero-Valued Fields
+
+   An implementer can use the following cases to test the rules of
+   Section 5.
+
+   Case 1, UDP without a checksum.  The words are those of Appendix A.5,
+   but the UDP checksum field is 0000.  The word m = 5555 changes to m'
+   = 3285.  The field stays 0000, as required in Section 5.1.  With
+   plain Eqn. 1, the steps would instead be as follows:
+
+       ~HC                   = ~0000          = FFFF
+       FFFF +' AAAA (~5555)  = AAAA  (1AAA9)
+       AAAA +' 3285          = DD2F
+       HC' = ~DD2F           = 22D0
+
+   With 22D0 in the field, the receiver detects a checksum error and
+   discards a valid datagram.
+
+   Case 2, an incoming FFFF repaired by Eqn. 1.  The other words sum to
+   CD7A, and m = 3285.  Thus, the sum of all words is FFFF, and the
+   correct checksum is 0000.  An upstream system wrote FFFF instead.
+   The word changes to m' = 5555:
+
+       ~HC                   = ~FFFF          = 0000
+       0000 +' CD7A (~3285)  = CD7A
+       CD7A +' 5555          = 22D0  (122CF)
+       HC' = ~22D0           = DD2F
+
+   Recomputed: CD7A +' 5555 = 22D0, so the checksum is DD2F, as with
+   Eqn. 1.  An intermediate system that applies Eqn. 1 thus replaces the
+   incorrect FFFF.
+
+   Case 3, an incoming FFFF for which the rule of Section 5.3 is needed.
+   The other words sum to FFFF, and m = FFFF.  Thus, the correct
+   checksum is 0000.  An upstream system wrote FFFF instead.  The word
+   changes to m' = 0000:
+
+       ~HC                   = ~FFFF          = 0000
+       0000 +' 0000 (~FFFF)  = 0000
+       0000 +' 0000          = 0000
+       HC' = ~0000           = FFFF   -> written as 0000 by the rule
+
+   Recomputed: FFFF +' 0000 = FFFF, so the checksum is 0000.  The
+   results match only if the intermediate system applies the rule.
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 36]
+
+Internet-Draft        LLM-Assisted Checksum Survey          October 2026
+
+
+A.9.  Branch-Free Update
+
+   An implementer can use the following cases to test the functions of
+   Section 5.5.
+
+   UDP with a checksum: the words are those of Appendix A.5, with HC =
+   DD2F, m = 5555, and m' = 3285.  In csum_update_udp_bf(), the steps
+   for Eqn. 3 and the mask are as follows:
+
+       DD2F +' 5555          = 3285  (13284)
+       3285 +' CD7A (~3285)  = FFFF
+       keep = -((DD2F + FFFF) >> 16) = -(1DD2E >> 16) = -1  -> FFFF
+       HC' = FFFF AND FFFF   = FFFF
+
+   The result of the full computation is 0000, which a UDP sender
+   transmits as FFFF (Appendix A.5).
+
+   UDP without a checksum: HC = 0000.  Then (0000 + FFFF) >> 16 = 0, so
+   the mask is 0000, and the field stays 0000 regardless of the other
+   words.
+
+   Other protocols: in Case 3 of Appendix A.8, r = FFFF after Eqn. 1 in
+   csum_update_plain_bf().  Then (r + 1) >> 16 = 10000 >> 16 = 1, and 1
+   - 1 = 0.  The mask is therefore 0, and the result is 0000.
+
+Acknowledgments
+
+   This work is based on [RFC1071], [RFC1141], and [RFC1624], and on
+   errata 4782, 5864, and 5865 against RFC 1624.
+
+Author's Address
+
+   Andrew Yourtchenko
+   Cisco
+   Email: ayourtch@cisco.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Yourtchenko               Expires 24 April 2027                [Page 37]
